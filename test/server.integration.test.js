@@ -132,6 +132,30 @@ test('paste and version APIs round-trip durable data', async t => {
   const paste = await pasteResponse.json()
   assert.equal(await fetch(`${baseUrl}/api/pastes/${paste.id}/raw`).then(response => response.text()), 'const verified = true\n')
 
+  const protectedResponse = await fetch(`${baseUrl}/api/pastes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: 'const secret = "encrypted"\n', language: 'javascript', expiresIn: 'week', password: 'correct horse battery staple' }) })
+  assert.equal(protectedResponse.status, 201)
+  const protectedPaste = await protectedResponse.json()
+  assert.equal(protectedPaste.protected, true)
+  const storedPaste = await readFile(join(dataDir, 'pastes', `${protectedPaste.id}.json`), 'utf8')
+  assert.equal(storedPaste.includes('const secret'), false)
+  assert.equal(storedPaste.includes('correct horse'), false)
+
+  const lockedResponse = await fetch(`${baseUrl}/api/pastes/${protectedPaste.id}`)
+  assert.equal(lockedResponse.status, 401)
+  const lockedMetadata = await lockedResponse.json()
+  assert.equal(lockedMetadata.protected, true)
+  assert.equal('content' in lockedMetadata, false)
+
+  const wrongResponse = await fetch(`${baseUrl}/api/pastes/${protectedPaste.id}`, { headers: { 'x-paste-password': 'definitely incorrect' } })
+  assert.equal(wrongResponse.status, 401)
+  const unlockedResponse = await fetch(`${baseUrl}/api/pastes/${protectedPaste.id}`, { headers: { 'x-paste-password': 'correct horse battery staple' } })
+  assert.equal(unlockedResponse.status, 200)
+  assert.equal((await unlockedResponse.json()).content, 'const secret = "encrypted"\n')
+  const rawLockedResponse = await fetch(`${baseUrl}/api/pastes/${protectedPaste.id}/raw`)
+  assert.equal(rawLockedResponse.status, 401)
+  const rawUnlockedResponse = await fetch(`${baseUrl}/api/pastes/${protectedPaste.id}/raw`, { headers: { 'x-paste-password': 'correct horse battery staple' } })
+  assert.equal(await rawUnlockedResponse.text(), 'const secret = "encrypted"\n')
+
   const room = await fetch(`${baseUrl}/api/rooms`, { method: 'POST' }).then(response => response.json())
   const headers = { 'content-type': 'application/json', authorization: `Bearer ${room.ownerToken}` }
   const versionResponse = await fetch(`${baseUrl}/api/rooms/${room.id}/versions`, { method: 'POST', headers, body: JSON.stringify({ title: 'Test', label: 'Checkpoint', blocks: [{ id: 'a', type: 'paragraph', props: {}, content: [], children: [] }] }) })

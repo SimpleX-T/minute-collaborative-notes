@@ -5,7 +5,8 @@ import { createServer } from 'node:http'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt } from 'node:crypto'
+import { promisify } from 'node:util'
 
 const PORT = Number(process.env.PORT || 8787)
 const DATA_DIR = resolve(process.env.DATA_DIR || './data')
@@ -13,9 +14,13 @@ const PASTE_DIR = join(DATA_DIR, 'pastes')
 const MAX_MESSAGE = 1_000_000
 const ROOM_CREATE_WINDOW = 60_000
 const ROOM_CREATE_LIMIT = 20
+const PASTE_UNLOCK_WINDOW = 5 * 60_000
+const PASTE_UNLOCK_LIMIT = 10
+const scryptAsync = promisify(scrypt)
 const rooms = new Map()
 const loadingRooms = new Map()
 const creationWindows = new Map()
+const pasteUnlockWindows = new Map()
 const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean))
 const allowedEmbedOrigins = (process.env.ALLOWED_EMBED_ORIGINS || '').split(',').map(value => value.trim()).filter(value => /^https:\/\/[a-z0-9.*-]+(?::\d+)?$/i.test(value))
 await mkdir(DATA_DIR, { recursive: true })
@@ -37,7 +42,7 @@ app.use((request, response, next) => {
     response.setHeader('Vary', 'Origin')
   }
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Paste-Password')
   response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   response.setHeader('X-Content-Type-Options', 'nosniff')
   if (request.path.startsWith('/embed/')) response.setHeader('Content-Security-Policy', `frame-ancestors 'self' ${allowedEmbedOrigins.join(' ')}`.trim())
@@ -69,24 +74,32 @@ app.post('/api/pastes', async (request, response) => {
   if (!allowRoomCreation(`paste:${request.ip || request.socket.remoteAddress || 'unknown'}`)) return response.status(429).json({ error: 'Too many pastes. Try again in a minute.' })
   const content = String(request.body?.content || '')
   if (!content.trim() || Buffer.byteLength(content) > MAX_MESSAGE) return response.status(400).json({ error: 'Paste content must be between 1 byte and 1 MB.' })
+  const password = String(request.body?.password || '')
+  if (password && (password.length < 8 || Buffer.byteLength(password) > 128)) return response.status(400).json({ error: 'Passwords must be between 8 and 128 bytes.' })
   const language = String(request.body?.language || 'text').replace(/[^a-z0-9+#-]/gi, '').slice(0, 30) || 'text'
   const expiry = { hour: 3_600_000, day: 86_400_000, week: 604_800_000 }[request.body?.expiresIn] || null
   const id = randomBytes(7).toString('base64url')
-  const paste = { id, content, language, createdAt: new Date().toISOString(), expiresAt: expiry ? new Date(Date.now() + expiry).toISOString() : null }
+  const paste = { id, language, createdAt: new Date().toISOString(), expiresAt: expiry ? new Date(Date.now() + expiry).toISOString() : null, protected: Boolean(password) }
+  if (password) paste.encryption = await encryptPaste(content, password)
+  else paste.content = content
   await atomicJsonWrite(join(PASTE_DIR, `${id}.json`), paste)
-  response.status(201).json({ id })
+  response.status(201).json({ id, protected: paste.protected })
 })
 app.get('/api/pastes/:id', async (request, response) => {
   const paste = await readPaste(request.params.id)
   if (!paste) return response.status(404).json({ error: 'Paste not found or expired.' })
-  response.set('Cache-Control', 'public, max-age=30')
-  response.json(paste)
+  const content = await authorizePaste(request, response, paste)
+  if (content === null) return
+  if (!paste.protected) response.set('Cache-Control', 'public, max-age=30')
+  response.json({ ...pasteMetadata(paste), content })
 })
 app.get('/api/pastes/:id/raw', async (request, response) => {
   const paste = await readPaste(request.params.id)
   if (!paste) return response.status(404).type('text').send('Paste not found or expired.')
-  response.set('Cache-Control', 'public, max-age=30')
-  response.type('text/plain').send(paste.content)
+  const content = await authorizePaste(request, response, paste, true)
+  if (content === null) return
+  if (!paste.protected) response.set('Cache-Control', 'public, max-age=30')
+  response.type('text/plain').send(content)
 })
 app.get('/api/rooms/:id/versions', async (request, response) => {
   const room = await authorizedRoom(request, response, ['owner', 'editor'])
@@ -256,6 +269,42 @@ async function readPaste(id) {
     return paste
   } catch (error) { if (error.code !== 'ENOENT') console.error('paste load failed', id, error); return null }
 }
+function pasteMetadata(paste) {
+  return { id: paste.id, language: paste.language, createdAt: paste.createdAt, expiresAt: paste.expiresAt, protected: paste.protected === true }
+}
+async function authorizePaste(request, response, paste, raw = false) {
+  if (!paste.protected) return String(paste.content || '')
+  const metadata = pasteMetadata(paste)
+  const password = String(request.get('X-Paste-Password') || '')
+  const key = `${request.params.id}:${request.ip || request.socket.remoteAddress || 'unknown'}`
+  const reject = (status, error) => raw ? response.status(status).type('text').send(error) : response.status(status).json({ ...metadata, error })
+  if (!password) { reject(401, 'This paste is password protected.'); return null }
+  if (!allowPasteUnlock(key)) { response.set('Retry-After', '300'); reject(429, 'Too many unlock attempts. Try again in five minutes.'); return null }
+  const content = await decryptPaste(paste.encryption, password)
+  if (content === null) { recordPasteUnlockFailure(key); reject(401, 'Incorrect password.'); return null }
+  pasteUnlockWindows.delete(key)
+  response.set('Cache-Control', 'private, no-store')
+  return content
+}
+async function encryptPaste(content, password) {
+  const salt = randomBytes(16)
+  const iv = randomBytes(12)
+  const key = await scryptAsync(password, salt, 32, { N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const ciphertext = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
+  return { algorithm: 'aes-256-gcm', salt: salt.toString('base64url'), iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), ciphertext: ciphertext.toString('base64url') }
+}
+async function decryptPaste(encryption, password) {
+  try {
+    if (encryption?.algorithm !== 'aes-256-gcm') return null
+    const salt = Buffer.from(encryption.salt, 'base64url')
+    const iv = Buffer.from(encryption.iv, 'base64url')
+    const key = await scryptAsync(password, salt, 32, { N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(Buffer.from(encryption.tag, 'base64url'))
+    return Buffer.concat([decipher.update(Buffer.from(encryption.ciphertext, 'base64url')), decipher.final()]).toString('utf8')
+  } catch { return null }
+}
 async function readVersions(room) {
   try { return JSON.parse(await readFile(room.versionsPath, 'utf8')) }
   catch (error) { if (error.code !== 'ENOENT') console.error('version load failed', room.id, error); return [] }
@@ -314,6 +363,17 @@ function allowRoomCreation(key) {
   recent.push(now)
   creationWindows.set(key, recent)
   return true
+}
+
+function allowPasteUnlock(key) {
+  const now = Date.now()
+  const recent = (pasteUnlockWindows.get(key) || []).filter(timestamp => now - timestamp < PASTE_UNLOCK_WINDOW)
+  pasteUnlockWindows.set(key, recent)
+  return recent.length < PASTE_UNLOCK_LIMIT
+}
+
+function recordPasteUnlockFailure(key) {
+  pasteUnlockWindows.set(key, [...(pasteUnlockWindows.get(key) || []), Date.now()])
 }
 
 const heartbeat = setInterval(() => {

@@ -57,9 +57,8 @@ function Home({ theme, onThemeToggle }) {
       <div className="eyebrow"><i /> For the meeting already in progress</div>
       <h1>Write once.<br/><em>Leave aligned.</em></h1>
       <p>One quiet page for notes, decisions, and next steps. Share the link and everyone is there—instantly.</p>
-      <button className="primary" onClick={create} disabled={creating}>{creating ? 'Opening room…' : 'Start a shared note'} <Arrow /></button>
+      <div className="hero-actions"><button className="primary" onClick={create} disabled={creating}>{creating ? 'Opening room…' : 'Start a shared note'} <Arrow /></button><a className="paste-link" href="/paste"><Code2 /> Share a code paste</a></div>
       {createError && <div className="hero-error" role="alert">{createError} <button onClick={create}>Retry</button></div>}
-      <a className="paste-link" href="/paste"><Code2 /> Share a code paste</a>
       <span className="subnote">Private link · Live collaboration · Export anytime</span>
     </section>
     <aside className="preview" aria-label="Example collaborative note">
