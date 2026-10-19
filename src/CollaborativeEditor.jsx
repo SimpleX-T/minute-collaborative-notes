@@ -6,17 +6,6 @@ import { syntaxHighlighter } from '@blocknote/code-block'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/mantine/style.css'
 
-const initialMarkdown = `## Context
-What are we here to align on?
-
-## Notes
-Start typing together…
-
-## Decisions
-
-## Action items
-- [ ] Owner — next step`
-
 export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ room, user, editable, compact = false, theme = 'light' }, ref) {
   const fragment = room.doc.getXmlFragment('blocknote')
   const editor = useCreateBlockNote(withCollaboration({
@@ -41,8 +30,11 @@ export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ roo
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (room.meta.get('blocknoteSeeded')) return
-      const blocks = editor.tryParseMarkdownToBlocks(room.text.toString() || initialMarkdown)
-      editor.replaceBlocks(editor.document, blocks)
+      const legacyMarkdown = room.text.toString().trim()
+      if (legacyMarkdown) {
+        const blocks = editor.tryParseMarkdownToBlocks(legacyMarkdown)
+        editor.replaceBlocks(editor.document, blocks)
+      }
       room.meta.set('blocknoteSeeded', true)
     }, 700)
     return () => window.clearTimeout(timer)

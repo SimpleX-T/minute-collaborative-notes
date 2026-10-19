@@ -75,7 +75,7 @@ function Home({ theme, onThemeToggle }) {
 function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const savedName = localStorage.getItem('minute:name') || `Guest ${Math.floor(Math.random() * 90 + 10)}`
   const [name, setName] = useState(savedName)
-  const [title, setTitle] = useState('Untitled meeting')
+  const [title, setTitle] = useState('')
   const [connection, setConnection] = useState('connecting')
   const [saveState, setSaveState] = useState('saved')
   const [people, setPeople] = useState([])
@@ -115,15 +115,12 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
     room.current = collaboration
     setCollaboration(collaboration)
     const update = () => {
-      const nextTitle = collaboration.meta.get('title') || 'Untitled meeting'
+      const nextTitle = collaboration.meta.get('title') || ''
       setTitle(nextTitle)
       setIsPublic(collaboration.meta.get('public') === true)
       setLocked(collaboration.meta.get('locked') === true)
     }
     collaboration.doc.on('update', update)
-    window.setTimeout(() => {
-      if (!collaboration.meta.has('title')) collaboration.meta.set('title', 'Weekly engineering sync')
-    }, 250)
     return () => { floatingWindow.current?.close(); collaboration.doc.off('update', update); collaboration.close() }
   }, [roomId])
 
@@ -265,7 +262,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const canEdit = role !== 'viewer' && (!locked || isOwner)
   const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} theme={theme} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit}/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit} placeholder="Untitled note"/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
@@ -305,7 +302,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
       <section className="paper-wrap">
         <div className="paper">
           <div className="meta"><span><Clock3 />{new Intl.DateTimeFormat('en', {weekday:'long', month:'long', day:'numeric'}).format(new Date())}</span><span><Radio /> Live room</span></div>
-          <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" />
+          <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" placeholder="Untitled note" />
           {role === 'viewer' && <div className="locked-banner viewer-banner"><BookOpen /> You have view-only access. Ask the room owner for an editable link to contribute.</div>}
           {locked && !isOwner && <div className="locked-banner"><Lock /> This room is locked. You can read, copy, and export, but only the owner can edit.</div>}
           {blockEditor}
