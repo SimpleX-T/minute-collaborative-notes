@@ -18,6 +18,8 @@
   ],
   "rewrites": [
     { "source": "/n/:room*", "destination": "/index.html" },
-    { "source": "/embed/:room*", "destination": "/index.html" }
+    { "source": "/embed/:room*", "destination": "/index.html" },
+    { "source": "/paste", "destination": "/index.html" },
+    { "source": "/p/:paste*", "destination": "/index.html" }
   ]
 }

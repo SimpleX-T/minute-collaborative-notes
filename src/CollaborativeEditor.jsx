@@ -17,7 +17,7 @@ Start typing together…
 ## Action items
 - [ ] Owner — next step`
 
-export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ room, user, editable, compact = false }, ref) {
+export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ room, user, editable, compact = false, theme = 'light' }, ref) {
   const fragment = room.doc.getXmlFragment('blocknote')
   const editor = useCreateBlockNote(withCollaboration({
     extensions: [syntaxHighlighter],
@@ -32,6 +32,9 @@ export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ roo
   useImperativeHandle(ref, () => ({
     editor,
     toMarkdown: () => editor.blocksToMarkdownLossy(editor.document),
+    toHTML: () => editor.blocksToFullHTML(editor.document),
+    toJSON: () => editor.document,
+    restore: blocks => editor.replaceBlocks(editor.document, blocks),
     focus: () => editor.focus()
   }), [editor])
 
@@ -55,7 +58,7 @@ export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ roo
     editor={editor}
     editable={editable}
     onChange={handleChange}
-    theme="light"
+    theme={theme}
     data-testid="blocknote-editor"
   />
 })

@@ -24,7 +24,7 @@ export function createRoom(roomId, name, onState, { ownerToken = '', editorToken
     socket.binaryType = 'arraybuffer'
     socket.onopen = () => {
       retry = 0
-      emit({ connection: 'connected' })
+      emit({ connection: 'connected', saveState: 'saved' })
       socket.send(JSON.stringify({ type: 'presence', name, colour }))
       awareness.setLocalStateField('user', { name, color: colour })
     }
@@ -33,6 +33,8 @@ export function createRoom(roomId, name, onState, { ownerToken = '', editorToken
         const message = JSON.parse(data)
         if (message.type === 'presence') emit({ people: message.people })
         if (message.type === 'access') emit({ role: message.role, locked: message.locked, public: message.public })
+        if (message.type === 'saved') emit({ saveState: 'saved', savedAt: message.at })
+        if (message.type === 'save-error') emit({ saveState: 'error' })
         if (message.type === 'awareness') applyAwarenessUpdate(awareness, new Uint8Array(message.update), 'remote')
       } else {
         Y.applyUpdate(doc, new Uint8Array(data), 'remote')
@@ -46,7 +48,10 @@ export function createRoom(roomId, name, onState, { ownerToken = '', editorToken
   }
 
   doc.on('update', (update, origin) => {
-    if (origin !== 'remote' && socket?.readyState === WebSocket.OPEN) socket.send(update)
+    if (origin !== 'remote' && socket?.readyState === WebSocket.OPEN) {
+      emit({ saveState: 'saving' })
+      socket.send(update)
+    }
   })
   awareness.on('update', ({ added, updated, removed }, origin) => {
     if (origin === 'remote' || socket?.readyState !== WebSocket.OPEN) return

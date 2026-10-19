@@ -1,40 +1,52 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoom } from './collaboration'
 import { createEmbedBridge } from './embedBridge'
-import { BookOpen, CheckSquare2, ChevronRight, Clock3, Download, Eye, FileText, Globe2, Link2, Lock, MessageSquareText, MonitorUp, MoreHorizontal, PanelLeft, Plus, Radio, Share2, Sparkles, Unlock, X } from 'lucide-react'
+import { exportDocument } from './exportDocument'
+import { BookOpen, CheckSquare2, ChevronRight, Clock3, Code2, Download, Eye, FileText, Globe2, History, Link2, Lock, MessageSquareText, MonitorUp, Moon, MoreHorizontal, PanelLeft, Plus, Radio, RotateCcw, Save, Share2, Sparkles, Sun, Unlock, X } from 'lucide-react'
 
 const CollaborativeEditor = lazy(() => import('./CollaborativeEditor').then(module => ({ default: module.CollaborativeEditor })))
+const PastePage = lazy(() => import('./PastePage').then(module => ({ default: module.PastePage })))
 const API_URL = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || ''
 const EMBED_ORIGINS = import.meta.env.VITE_EMBED_ORIGINS || ''
 
 export function App() {
+  const [theme, toggleTheme] = useTheme()
   const roomId = location.pathname.match(/^\/(?:n|embed)\/([a-zA-Z0-9_-]+)$/)?.[1]
-  return roomId ? <Note roomId={roomId} compact={location.pathname.startsWith('/embed/')} /> : <Home />
+  const pasteId = location.pathname.match(/^\/p\/([a-zA-Z0-9_-]+)$/)?.[1]
+  if (location.pathname === '/paste' || pasteId) return <Suspense fallback={<main className="room-loading"><Brand/><span>Opening the paste studio…</span></main>}><PastePage pasteId={pasteId} apiUrl={API_URL} theme={theme} onThemeToggle={toggleTheme} /></Suspense>
+  return roomId
+    ? <Note roomId={roomId} compact={location.pathname.startsWith('/embed/')} theme={theme} onThemeToggle={toggleTheme} />
+    : <Home theme={theme} onThemeToggle={toggleTheme} />
 }
 
-function Home() {
+function Home({ theme, onThemeToggle }) {
   const [creating, setCreating] = useState(false)
   const [publicPads, setPublicPads] = useState([])
   useEffect(() => { fetch(`${API_URL}/api/public`).then(response => response.ok ? response.json() : []).then(setPublicPads).catch(() => {}) }, [])
   const create = async () => {
     setCreating(true)
     try {
-      const response = await fetch(`${API_URL}/api/rooms`, { method: 'POST' })
-      if (!response.ok) throw new Error('Room creation failed')
-      const { id, ownerToken, editorToken } = await response.json()
-      location.assign(`/n/${id}#owner=${ownerToken}&edit=${editorToken}`)
+      location.assign(await createRoomUrl())
     } catch {
       setCreating(false)
       window.alert('Minute could not create the room. Check the connection and try again.')
     }
   }
+  useEffect(() => {
+    const handleShortcut = event => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !creating) { event.preventDefault(); create() }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [creating])
   return <main className="home">
-    <nav><Brand /><span className="quiet">No account. No setup.</span></nav>
+    <nav><Brand /><div className="home-nav-actions"><span className="quiet">No account. No setup.</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></nav>
     <section className="hero">
       <div className="eyebrow"><i /> For the meeting already in progress</div>
       <h1>Write once.<br/><em>Leave aligned.</em></h1>
       <p>One quiet page for notes, decisions, and next steps. Share the link and everyone is there—instantly.</p>
       <button className="primary" onClick={create} disabled={creating}>{creating ? 'Opening room…' : 'Start a shared note'} <Arrow /></button>
+      <a className="paste-link" href="/paste"><Code2 /> Share a code paste</a>
       <span className="subnote">Private link · Live collaboration · Export anytime</span>
     </section>
     <aside className="preview" aria-label="Example collaborative note">
@@ -60,14 +72,22 @@ function Home() {
   </main>
 }
 
-function Note({ roomId, compact = false }) {
+function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const savedName = localStorage.getItem('minute:name') || `Guest ${Math.floor(Math.random() * 90 + 10)}`
   const [name, setName] = useState(savedName)
   const [title, setTitle] = useState('Untitled meeting')
   const [connection, setConnection] = useState('connecting')
+  const [saveState, setSaveState] = useState('saved')
   const [people, setPeople] = useState([])
   const [copied, setCopied] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exporting, setExporting] = useState('')
+  const [versionsOpen, setVersionsOpen] = useState(false)
+  const [versions, setVersions] = useState([])
+  const [versionBusy, setVersionBusy] = useState('')
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [toast, setToast] = useState('')
   const [isPublic, setIsPublic] = useState(false)
   const [locked, setLocked] = useState(false)
   const [collaboration, setCollaboration] = useState(null)
@@ -86,6 +106,7 @@ function Note({ roomId, compact = false }) {
   useEffect(() => {
     const collaboration = createRoom(roomId, name, state => {
       if (state.connection) setConnection(state.connection)
+      if (state.saveState) setSaveState(state.saveState)
       if (state.people) setPeople(state.people)
       if (state.role) setRole(state.role)
       if (typeof state.locked === 'boolean') setLocked(state.locked)
@@ -118,8 +139,8 @@ function Note({ roomId, compact = false }) {
   }, [compact, collaboration, roomId])
 
   useEffect(() => {
-    embedBridge.current?.notify({ title, connection, locked, role, people: people.length })
-  }, [title, connection, locked, role, people.length])
+    embedBridge.current?.notify({ title, connection, saveState, locked, role, people: people.length })
+  }, [title, connection, saveState, locked, role, people.length])
 
   useEffect(() => {
     const live = floatingWindow.current?.document.querySelector('.live')
@@ -137,27 +158,97 @@ function Note({ roomId, compact = false }) {
   }
   const copyLink = async mode => {
     const token = mode === 'editor' ? editorToken : ''
-    await navigator.clipboard.writeText(`${location.origin}/n/${roomId}${token ? `#edit=${token}` : ''}`)
-    setCopied(mode); window.setTimeout(() => setCopied(false), 1800)
+    const value = `${location.origin}/n/${roomId}${token ? `#edit=${token}` : ''}`
+    try {
+      await copyText(value)
+      setCopied(mode); window.setTimeout(() => setCopied(false), 1800)
+    } catch { showToast('Copy failed. Select the address from your browser instead.') }
   }
-  const download = () => {
-    const markdown = editorRef.current?.toMarkdown() || ''
-    const blob = new Blob([`# ${title}\n\n${markdown}`], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob); const link = document.createElement('a')
-    link.href = url; link.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'meeting'}.md`; link.click(); URL.revokeObjectURL(url)
+  const download = async format => {
+    setExporting(format)
+    try {
+      await exportDocument(format, {
+        title,
+        markdown: await editorRef.current?.toMarkdown() || '',
+        html: await editorRef.current?.toHTML() || '',
+        blocks: editorRef.current?.toJSON() || []
+      })
+      setExportOpen(false)
+      showToast(`${format.toUpperCase()} downloaded.`)
+    } catch (error) {
+      console.error('Export failed', error)
+      showToast(`${format.toUpperCase()} export failed. Try again.`)
+    } finally { setExporting('') }
   }
   const floatNote = async () => {
     if (floatingWindow.current && !floatingWindow.current.closed) return floatingWindow.current.focus()
+    const capability = ownerToken ? `owner=${ownerToken}${editorToken ? `&edit=${editorToken}` : ''}` : editorToken ? `edit=${editorToken}` : ''
+    const embedUrl = `${location.origin}/embed/${roomId}${capability ? `#${capability}` : ''}`
     try {
-      const target = window.documentPictureInPicture
-        ? await window.documentPictureInPicture.requestWindow({ width: 430, height: 620 })
-        : window.open('', `minute-${roomId}`, 'popup,width=430,height=620')
-      if (!target) return
+      let target
+      if (window.documentPictureInPicture) {
+        target = await window.documentPictureInPicture.requestWindow({ width: 430, height: 620 })
+        target.document.documentElement.style.cssText = 'width:100%;height:100%;margin:0;background:#fff'
+        target.document.body.style.cssText = 'width:100%;height:100%;margin:0;overflow:hidden'
+        target.document.title = `${title} — Minute`
+        const frame = target.document.createElement('iframe')
+        frame.src = embedUrl
+        frame.title = 'Floating Minute note'
+        frame.allow = 'clipboard-write'
+        frame.style.cssText = 'display:block;width:100%;height:100%;border:0;background:transparent'
+        target.document.body.append(frame)
+      } else {
+        target = window.open(embedUrl, `minute-${roomId}`, 'popup,width=430,height=620')
+      }
+      if (!target) throw new Error('Popup blocked')
       floatingWindow.current = target
-      const capability = ownerToken ? `owner=${ownerToken}${editorToken ? `&edit=${editorToken}` : ''}` : editorToken ? `edit=${editorToken}` : ''
-      target.location.href = `${location.origin}/embed/${roomId}${capability ? `#${capability}` : ''}`
       target.addEventListener('pagehide', () => { if (floatingWindow.current === target) floatingWindow.current = null }, { once: true })
-    } catch (error) { console.warn('Floating notes unavailable', error) }
+    } catch (error) {
+      console.warn('Floating notes unavailable', error)
+      showToast('Always-on-top is unavailable here. Open Reading view in a separate window instead.')
+    }
+  }
+  const showToast = message => { setToast(message); window.setTimeout(() => setToast(''), 3200) }
+  const createNewNote = async () => {
+    try { location.assign(await createRoomUrl()) }
+    catch { showToast('Minute could not create a new room. Check your connection.') }
+  }
+  const versionToken = ownerToken || editorToken
+  const loadVersions = async () => {
+    if (!versionToken) return showToast('Version history requires an editable link.')
+    setVersionBusy('loading')
+    try {
+      const response = await fetch(`${API_URL}/api/rooms/${roomId}/versions`, { headers: { Authorization: `Bearer ${versionToken}` } })
+      if (!response.ok) throw new Error('Version history unavailable')
+      setVersions(await response.json())
+      setVersionsOpen(true)
+    } catch { showToast('Version history could not be loaded.') }
+    finally { setVersionBusy('') }
+  }
+  const saveVersion = async (label = 'Manual checkpoint') => {
+    if (!versionToken) return
+    setVersionBusy('saving')
+    try {
+      const response = await fetch(`${API_URL}/api/rooms/${roomId}/versions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${versionToken}` }, body: JSON.stringify({ title, label, blocks: editorRef.current?.toJSON() || [] }) })
+      if (!response.ok) throw new Error('Checkpoint failed')
+      await loadVersions()
+      showToast('Version checkpoint saved.')
+    } catch { showToast('Version checkpoint could not be saved.') }
+    finally { setVersionBusy('') }
+  }
+  const restoreVersion = async versionId => {
+    if (!isOwner || !window.confirm('Restore this version? Minute will first save the current document as a safety checkpoint.')) return
+    setVersionBusy(versionId)
+    try {
+      await saveVersion('Before version restore')
+      const response = await fetch(`${API_URL}/api/rooms/${roomId}/versions/${versionId}`, { headers: { Authorization: `Bearer ${ownerToken}` } })
+      if (!response.ok) throw new Error('Restore failed')
+      const version = await response.json()
+      editorRef.current?.restore(version.blocks)
+      setVersionsOpen(false)
+      showToast('Version restored. Saving…')
+    } catch { showToast('That version could not be restored.') }
+    finally { setVersionBusy('') }
   }
   const togglePublic = () => {
     if (!isOwner) return
@@ -172,30 +263,41 @@ function Note({ roomId, compact = false }) {
   if (!collaboration) return <main className="room-loading"><Brand /><span>Opening the room…</span></main>
 
   const canEdit = role !== 'viewer' && (!locked || isOwner)
-  const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} /></Suspense>
+  const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} theme={theme} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><span className={`status ${connection}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : 'Live'}</span></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit}/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit}/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
       <div className="toolbar-start"><Brand /><span className="crumb-rule"/><span className="room-crumb">Meeting room</span></div>
-      <div className={`status ${connection}`}><i />{connection === 'connected' ? 'Saved live' : connection}</div>
+      <div className={`status ${connection} ${saveState}`}><i />{connection !== 'connected' ? connection : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</div>
       <div className="tools">
         <div className="presence">{people.slice(0, 3).map(person => <span key={person.id} style={{background: person.colour}} title={person.name}>{person.name?.[0]?.toUpperCase()}</span>)}{people.length > 3 && <small>+{people.length - 3}</small>}</div>
         <button className={`icon-action lock-action ${locked ? 'is-locked' : ''}`} onClick={toggleLock} disabled={!isOwner} title={isOwner ? (locked ? 'Unlock editing' : 'Lock editing') : 'Only the room owner can change the lock'}>{locked ? <Lock /> : <Unlock />} <span>{locked ? 'Locked' : 'Unlocked'}</span></button>
         <button className={`icon-action publish ${isPublic ? 'is-public' : ''}`} onClick={togglePublic} disabled={!isOwner} title={isOwner ? (isPublic ? 'Remove from Public Pads' : 'Publish to Public Pads') : 'Only the room owner can publish'}><Globe2 /> <span>{isPublic ? 'Public' : 'Publish'}</span></button>
         <button className="icon-action float" onClick={floatNote} title="Keep notes above your other windows"><MonitorUp /> <span>Float</span></button>
-        <button className="icon-only" onClick={download} title="Export Markdown" aria-label="Export Markdown"><Download /></button>
+        <div className="export-control">
+          <button className="icon-only" onClick={() => setExportOpen(value => !value)} title="Download note" aria-label="Download note" aria-expanded={exportOpen}><Download /></button>
+          {exportOpen && <div className="export-menu" role="menu">
+            <span>Download as</span>
+            {[['markdown', 'Markdown', '.md'], ['pdf', 'PDF document', '.pdf'], ['docx', 'Word document', '.docx'], ['html', 'Web page', '.html'], ['text', 'Plain text', '.txt'], ['json', 'Block data', '.json']].map(([format, label, extension]) =>
+              <button key={format} role="menuitem" onClick={() => download(format)} disabled={Boolean(exporting)}><strong>{exporting === format ? 'Preparing…' : label}</strong><small>{extension}</small></button>
+            )}
+          </div>}
+        </div>
+        <button className="icon-only" onClick={loadVersions} title="Version history" aria-label="Version history"><History /></button>
+        <ThemeToggle theme={theme} onToggle={onThemeToggle} />
         <button className="share" onClick={() => setShareOpen(true)}><Share2 />Share</button>
       </div>
     </header>
-    <div className="workspace-shell">
+    <div className={`workspace-shell ${panelCollapsed ? 'panel-is-collapsed' : ''}`}>
       <aside className="note-rail">
-        <button className="new-note" onClick={() => location.assign('/')}><Plus /> New note</button>
+        <button className="new-note" onClick={createNewNote}><Plus /> New note</button>
         <nav className="room-nav" aria-label="Room navigation">
           <button className="active"><FileText /><span>Meeting note</span><ChevronRight /></button>
           <button onClick={() => window.open(`/embed/${roomId}`, '_blank', 'noopener')}><Eye /><span>Reading view</span></button>
-          <button onClick={togglePublic}><Globe2 /><span>Public pads</span></button>
+          <button onClick={togglePublic}><Globe2 /><span>{isPublic ? 'Unpublish note' : 'Publish note'}</span></button>
+          <a href="/paste"><Code2 /><span>New code paste</span></a>
         </nav>
         <div className="rail-art"><img src="/assets/collaboration-still-life.png" alt="Abstract paper, pencil and glass composition"/><div><Sparkles/><span>Good meetings leave<br/>clear next steps.</span></div></div>
         <div className="identity"><span className="identity-avatar">{name[0]?.toUpperCase()}</span><div><label>You are</label><input value={name} onChange={changeName} aria-label="Your display name" /></div><MoreHorizontal /></div>
@@ -210,7 +312,7 @@ function Note({ roomId, compact = false }) {
         </div>
       </section>
       <aside className="meeting-panel">
-        <div className="panel-heading"><div><span>Room</span><h2>In this meeting</h2></div><button aria-label="Collapse panel"><PanelLeft /></button></div>
+        <div className="panel-heading"><div><span>Room</span><h2>In this meeting</h2></div><button onClick={() => setPanelCollapsed(true)} aria-label="Collapse panel"><PanelLeft /></button></div>
         <div className="people-card">
           {people.map(person => <div className="person" key={person.id}><span style={{background:person.colour}}>{person.name?.[0]?.toUpperCase()}</span><div><strong>{person.name}</strong><small>{person.id === room.current?.clientId ? 'You · editing' : 'In the note'}</small></div><i /></div>)}
           <button onClick={() => setShareOpen(true)}><Plus /> Invite someone</button>
@@ -218,6 +320,7 @@ function Note({ roomId, compact = false }) {
         <div className="panel-section"><span className="panel-label">Meeting pulse</span><div className="pulse-row"><span className="pulse-icon coral"><MessageSquareText /></span><div><strong>Capture decisions</strong><small>Turn discussion into clarity.</small></div></div><div className="pulse-row"><span className="pulse-icon blue"><CheckSquare2 /></span><div><strong>Assign next steps</strong><small>Add an owner before leaving.</small></div></div></div>
         <div className="meeting-tip"><Sparkles/><p><strong>Small ritual, big payoff.</strong><br/>End with two minutes of silent review so everyone leaves aligned.</p></div>
       </aside>
+      {panelCollapsed && <button className="panel-reopen" onClick={() => setPanelCollapsed(false)} aria-label="Open meeting panel"><PanelLeft /></button>}
     </div>
     {shareOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShareOpen(false) }}>
       <section className="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title">
@@ -228,11 +331,49 @@ function Note({ roomId, compact = false }) {
         {!editorToken && <small className="legacy-note">This legacy room has no separate editor capability. Create a new room for editable links.</small>}
       </section>
     </div>}
+    {versionsOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setVersionsOpen(false) }}>
+      <section className="share-dialog versions-dialog" role="dialog" aria-modal="true" aria-labelledby="versions-title">
+        <header><div><span>Document history</span><h2 id="versions-title">Versions</h2></div><button onClick={() => setVersionsOpen(false)} aria-label="Close version history"><X /></button></header>
+        <p>Checkpoints preserve the full block structure. Restoring creates a new collaborative change, so nobody loses the current state.</p>
+        <button className="save-version" onClick={() => saveVersion()} disabled={Boolean(versionBusy)}><Save />{versionBusy === 'saving' ? 'Saving checkpoint…' : 'Save current version'}</button>
+        <div className="version-list">
+          {versions.length ? versions.map(version => <div className="version-row" key={version.id}><div><strong>{version.label}</strong><small>{new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(version.createdAt))}</small></div>{isOwner && <button onClick={() => restoreVersion(version.id)} disabled={Boolean(versionBusy)}><RotateCcw /> Restore</button>}</div>) : <div className="version-empty">No checkpoints yet. Save the first one above.</div>}
+        </div>
+      </section>
+    </div>}
+    {toast && <div className="toast" role="status">{toast}</div>}
   </main>
 }
 
 function Brand(){ return <a className="brand" href="/" aria-label="Minute home"><span>m</span> minute</a> }
 function Arrow(){ return <svg viewBox="0 0 20 20"><path d="M4 10h11m-4-4 4 4-4 4"/></svg> }
+
+function ThemeToggle({ theme, onToggle }) {
+  return <button className="theme-toggle" onClick={onToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+    <span>{theme === 'dark' ? <Sun /> : <Moon />}</span>
+  </button>
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('minute:theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#171717' : '#ffffff')
+    localStorage.setItem('minute:theme', theme)
+  }, [theme])
+  const toggle = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.startViewTransition(() => setTheme(next))
+    } else setTheme(next)
+  }
+  return [theme, toggle]
+}
 
 function relativeTime(value) {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
@@ -240,4 +381,24 @@ function relativeTime(value) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
   return `${Math.floor(seconds / 86400)}d`
+}
+
+async function createRoomUrl() {
+  const response = await fetch(`${API_URL}/api/rooms`, { method: 'POST' })
+  if (!response.ok) throw new Error('Room creation failed')
+  const { id, ownerToken, editorToken } = await response.json()
+  return `/n/${id}#owner=${ownerToken}&edit=${editorToken}`
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value)
+  const field = document.createElement('textarea')
+  field.value = value
+  field.style.position = 'fixed'
+  field.style.opacity = '0'
+  document.body.append(field)
+  field.select()
+  const copied = document.execCommand('copy')
+  field.remove()
+  if (!copied) throw new Error('Copy unavailable')
 }

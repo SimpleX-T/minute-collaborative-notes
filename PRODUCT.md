@@ -41,6 +41,9 @@ The product is named Minute. Its voice is direct, calm, technically literate, an
 - Working React client and Node WebSocket server.
 - CRDT convergence tests and persistent local Yjs documents.
 - Picture-in-picture editor, public pads, Markdown export, and live presence.
+- Multi-format export includes Markdown, plain text, HTML, JSON, DOCX, and PDF.
+- Engineers can create standalone syntax-highlighted code pastes with raw links and expiry.
+- Room owners can checkpoint, inspect, and restore document versions.
 - Original collaboration artwork at `public/assets/collaboration-still-life.png`.
 - No validated customers, benchmarks, testimonials, pricing, or compliance claims exist yet.
 
