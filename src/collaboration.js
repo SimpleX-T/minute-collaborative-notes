@@ -32,7 +32,7 @@ export function createRoom(roomId, name, onState, { ownerToken = '' } = {}) {
       if (typeof data === 'string') {
         const message = JSON.parse(data)
         if (message.type === 'presence') emit({ people: message.people })
-        if (message.type === 'access') emit({ role: message.role })
+        if (message.type === 'access') emit({ role: message.role, locked: message.locked, public: message.public })
         if (message.type === 'awareness') applyAwarenessUpdate(awareness, new Uint8Array(message.update), 'remote')
       } else {
         Y.applyUpdate(doc, new Uint8Array(data), 'remote')
@@ -59,6 +59,9 @@ export function createRoom(roomId, name, onState, { ownerToken = '' } = {}) {
     updateName(nextName) {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'presence', name: nextName, colour }))
       awareness.setLocalStateField('user', { name: nextName, color: colour })
+    },
+    updateAccess(key, value) {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'control', key, value }))
     },
     close() { closed = true; removeAwarenessStates(awareness, [doc.clientID], 'local'); awareness.destroy(); socket?.close(); doc.destroy() }
   }

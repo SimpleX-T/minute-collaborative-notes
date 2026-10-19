@@ -11,5 +11,7 @@ services:
         value: production
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: ALLOWED_EMBED_ORIGINS
+        value: https://meet.google.com,https://*.teams.microsoft.com,https://app.slack.com
       - key: DATA_DIR
         value: /tmp/minute-data

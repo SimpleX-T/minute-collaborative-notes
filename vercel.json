@@ -1,6 +1,21 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/embed/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "frame-ancestors 'self' https://meet.google.com https://*.teams.microsoft.com https://app.slack.com" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/n/:room*", "destination": "/index.html" },
     { "source": "/embed/:room*", "destination": "/index.html" }

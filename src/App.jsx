@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoom } from './collaboration'
+import { createEmbedBridge } from './embedBridge'
 import { CheckSquare2, ChevronRight, Clock3, Download, Eye, FileText, Globe2, Lock, MessageSquareText, MonitorUp, MoreHorizontal, PanelLeft, Plus, Radio, Share2, Sparkles, Unlock } from 'lucide-react'
 
 const CollaborativeEditor = lazy(() => import('./CollaborativeEditor').then(module => ({ default: module.CollaborativeEditor })))
 const API_URL = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || ''
+const EMBED_ORIGINS = import.meta.env.VITE_EMBED_ORIGINS || ''
 
 export function App() {
   const roomId = location.pathname.match(/^\/(?:n|embed)\/([a-zA-Z0-9_-]+)$/)?.[1]
@@ -72,8 +74,11 @@ function Note({ roomId, compact = false }) {
   const room = useRef(null)
   const floatingWindow = useRef(null)
   const editorRef = useRef(null)
+  const embedBridge = useRef(null)
   const ownerToken = useMemo(() => new URLSearchParams(location.hash.slice(1)).get('owner'), [])
   const isOwner = role === 'owner'
+  const embedState = useRef({ title, locked, role })
+  embedState.current = { title, locked, role }
   const colour = useMemo(() => ['#315ee7', '#e45c3f', '#24866f', '#8a55d6'][Math.abs(name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % 4], [name])
 
   useEffect(() => {
@@ -81,6 +86,8 @@ function Note({ roomId, compact = false }) {
       if (state.connection) setConnection(state.connection)
       if (state.people) setPeople(state.people)
       if (state.role) setRole(state.role)
+      if (typeof state.locked === 'boolean') setLocked(state.locked)
+      if (typeof state.public === 'boolean') setIsPublic(state.public)
     }, { ownerToken })
     room.current = collaboration
     setCollaboration(collaboration)
@@ -96,6 +103,21 @@ function Note({ roomId, compact = false }) {
     }, 250)
     return () => { floatingWindow.current?.close(); collaboration.doc.off('update', update); collaboration.close() }
   }, [roomId])
+
+  useEffect(() => {
+    if (!compact || !collaboration) return
+    embedBridge.current = createEmbedBridge({
+      roomId,
+      configuredOrigins: EMBED_ORIGINS,
+      onFocus: () => editorRef.current?.focus(),
+      getSnapshot: async () => ({ ...embedState.current, markdown: await editorRef.current?.toMarkdown() || '' })
+    })
+    return () => { embedBridge.current?.dispose(); embedBridge.current = null }
+  }, [compact, collaboration, roomId])
+
+  useEffect(() => {
+    embedBridge.current?.notify({ title, connection, locked, role, people: people.length })
+  }, [title, connection, locked, role, people.length])
 
   useEffect(() => {
     const live = floatingWindow.current?.document.querySelector('.live')
@@ -134,19 +156,20 @@ function Note({ roomId, compact = false }) {
     } catch (error) { console.warn('Floating notes unavailable', error) }
   }
   const togglePublic = () => {
+    if (!isOwner) return
     if (!isPublic && !window.confirm('Publish this note? Anyone visiting Minute can discover and edit it.')) return
-    room.current.meta.set('public', !isPublic)
+    room.current.updateAccess('public', !isPublic)
   }
   const toggleLock = () => {
     if (!isOwner) return
-    room.current.meta.set('locked', !locked)
+    room.current.updateAccess('locked', !locked)
   }
 
   if (!collaboration) return <main className="room-loading"><Brand /><span>Opening the room…</span></main>
 
   const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={!locked || isOwner} compact={compact} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><span className={`status ${connection}`}><i/>{locked ? 'Locked' : 'Live'}</span></header><input className="embed-title" value={title} onChange={changeTitle}/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><span className={`status ${connection}`}><i/>{locked ? 'Locked' : 'Live'}</span></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={locked && !isOwner}/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
@@ -155,7 +178,7 @@ function Note({ roomId, compact = false }) {
       <div className="tools">
         <div className="presence">{people.slice(0, 3).map(person => <span key={person.id} style={{background: person.colour}} title={person.name}>{person.name?.[0]?.toUpperCase()}</span>)}{people.length > 3 && <small>+{people.length - 3}</small>}</div>
         <button className={`icon-action lock-action ${locked ? 'is-locked' : ''}`} onClick={toggleLock} disabled={!isOwner} title={isOwner ? (locked ? 'Unlock editing' : 'Lock editing') : 'Only the room owner can change the lock'}>{locked ? <Lock /> : <Unlock />} <span>{locked ? 'Locked' : 'Unlocked'}</span></button>
-        <button className={`icon-action publish ${isPublic ? 'is-public' : ''}`} onClick={togglePublic} title={isPublic ? 'Remove from Public Pads' : 'Publish to Public Pads'}><Globe2 /> <span>{isPublic ? 'Public' : 'Publish'}</span></button>
+        <button className={`icon-action publish ${isPublic ? 'is-public' : ''}`} onClick={togglePublic} disabled={!isOwner} title={isOwner ? (isPublic ? 'Remove from Public Pads' : 'Publish to Public Pads') : 'Only the room owner can publish'}><Globe2 /> <span>{isPublic ? 'Public' : 'Publish'}</span></button>
         <button className="icon-action float" onClick={floatNote} title="Keep notes above your other windows"><MonitorUp /> <span>Float</span></button>
         <button className="icon-only" onClick={download} title="Export Markdown" aria-label="Export Markdown"><Download /></button>
         <button className="share" onClick={share}><Share2 />{copied ? 'Copied' : 'Share'}</button>
@@ -175,7 +198,7 @@ function Note({ roomId, compact = false }) {
       <section className="paper-wrap">
         <div className="paper">
           <div className="meta"><span><Clock3 />{new Intl.DateTimeFormat('en', {weekday:'long', month:'long', day:'numeric'}).format(new Date())}</span><span><Radio /> Live room</span></div>
-          <input className="title" value={title} onChange={changeTitle} aria-label="Meeting title" />
+          <input className="title" value={title} onChange={changeTitle} readOnly={locked && !isOwner} aria-label="Meeting title" />
           {locked && !isOwner && <div className="locked-banner"><Lock /> This room is locked. You can read, copy, and export, but only the owner can edit.</div>}
           {blockEditor}
         </div>

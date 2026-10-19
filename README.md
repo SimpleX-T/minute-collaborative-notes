@@ -36,6 +36,6 @@ Rooms are bearer-capability links. Shared links edit unlocked rooms; the owner f
 
 ## Embed contract
 
-`/embed/:roomId` renders a compact, chrome-light editor suitable for Document Picture-in-Picture and future meeting-app side panels. The next integration milestone is a versioned `postMessage` protocol and host SDK covering ready, resize, export, permission, and action-item events.
+`/embed/:roomId` renders a compact, chrome-light editor suitable for Document Picture-in-Picture and meeting-app side panels. It includes a versioned, exact-origin `postMessage` bridge for ready, state, focus, and Markdown snapshot events. See [`docs/EMBED_PROTOCOL.md`](docs/EMBED_PROTOCOL.md). Provider-specific Google Meet, Teams, Zoom, and Slack adapters remain roadmap work.
 
 See [PRODUCT_ROADMAP.md](./PRODUCT_ROADMAP.md) for the beta and world-class quality gates.
