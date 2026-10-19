@@ -62,3 +62,4 @@ body,.home,.workspace,.toolbar,.note-rail,.meeting-panel,.paper-wrap,.paper,.emb
 
 @media(pointer:coarse){.icon-action,.icon-only,.share,.presence,.panel-heading button,.people-card>button,.mobile-actions-menu button,.mobile-actions-menu a{min-width:44px;min-height:44px}}
 @keyframes spin{to{transform:rotate(360deg)}}
+.paste-lock-shell form{margin-top:28px}
