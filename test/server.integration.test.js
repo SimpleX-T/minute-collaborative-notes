@@ -82,10 +82,12 @@ test('server persists accepted changes and enforces capability roles', async t =
   assert.equal(roomResponse.status, 201)
   const room = await roomResponse.json()
   const owner = await connect(baseUrl, room, `&owner=${room.ownerToken}`)
+  const editor = await connect(baseUrl, room, `&edit=${room.editorToken}`)
   const viewer = await connect(baseUrl, room)
-  t.after(() => { owner.socket.close(); viewer.socket.close() })
+  t.after(() => { owner.socket.close(); editor.socket.close(); viewer.socket.close() })
 
   assert.equal(owner.messages.find(message => message.type === 'access')?.role, 'owner')
+  assert.equal(editor.messages.find(message => message.type === 'access')?.role, 'editor')
   assert.equal(viewer.messages.find(message => message.type === 'access')?.role, 'viewer')
 
   owner.doc.getText('body').insert(0, 'durable change')
@@ -93,11 +95,21 @@ test('server persists accepted changes and enforces capability roles', async t =
   await waitFor(() => owner.messages.some(message => message.type === 'saved'), 'owner never received persisted-save acknowledgement')
   assert.ok((await readFile(join(dataDir, `${room.id}.bin`))).byteLength > 0)
 
+  editor.doc.getText('body').insert(editor.doc.getText('body').length, ' + editor change')
+  editor.socket.send(Y.encodeStateAsUpdate(editor.doc))
+  await waitFor(() => editor.messages.some(message => message.type === 'saved'), 'editor never received persisted-save acknowledgement')
+  await waitFor(() => owner.doc.getText('body').toString().includes('editor change'), 'owner never received editor change')
+
+  const reloadedEditor = await connect(baseUrl, room, `&edit=${room.editorToken}`)
+  t.after(() => reloadedEditor.socket.close())
+  await waitFor(() => reloadedEditor.doc.getText('body').toString().includes('editor change'), 'editor change disappeared after reload')
+
   const forbidden = new Y.Doc()
   forbidden.getText('body').insert(0, 'viewer mutation')
   viewer.socket.send(Y.encodeStateAsUpdate(forbidden))
-  await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(owner.doc.getText('body').toString(), 'durable change')
+  await waitFor(() => viewer.messages.some(message => message.type === 'write-rejected'), 'viewer received no explicit write rejection')
+  assert.equal(viewer.messages.some(message => message.type === 'saved'), false)
+  assert.equal(owner.doc.getText('body').toString().includes('viewer mutation'), false)
   assert.equal(stderr, '')
 })
 

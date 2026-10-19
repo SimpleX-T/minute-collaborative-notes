@@ -91,6 +91,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const [title, setTitle] = useState('')
   const [connection, setConnection] = useState('connecting')
   const [saveState, setSaveState] = useState('saved')
+  const [writeError, setWriteError] = useState('')
   const [people, setPeople] = useState([])
   const [copied, setCopied] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -105,7 +106,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const [isPublic, setIsPublic] = useState(false)
   const [locked, setLocked] = useState(false)
   const [collaboration, setCollaboration] = useState(null)
-  const [role, setRole] = useState('editor')
+  const [role, setRole] = useState('checking')
   const room = useRef(null)
   const floatingWindow = useRef(null)
   const editorRef = useRef(null)
@@ -133,6 +134,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
     const collaboration = createRoom(roomId, name, state => {
       if (state.connection) setConnection(state.connection)
       if (state.saveState) setSaveState(state.saveState)
+      if (typeof state.writeError === 'string') setWriteError(state.writeError)
       if (state.people) setPeople(state.people)
       if (state.role) setRole(state.role)
       if (typeof state.locked === 'boolean') setLocked(state.locked)
@@ -285,15 +287,16 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
 
   if (!collaboration) return <main className="room-loading"><Brand /><span>Opening the room…</span></main>
 
-  const canEdit = role !== 'viewer' && (!locked || isOwner)
+  const canEdit = (role === 'owner' || role === 'editor') && (!locked || isOwner)
+  const saveLabel = connection !== 'connected' ? connection : role === 'checking' ? 'Checking access…' : role === 'viewer' ? 'View only' : locked && !isOwner ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'rejected' ? 'Not saved' : saveState === 'error' ? 'Save failed' : 'Saved'
   const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} theme={theme} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit} placeholder="Untitled note" maxLength={100}/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i/>{saveLabel}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit} placeholder="Untitled note" maxLength={100}/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
       <div className="toolbar-start"><Brand /><span className="crumb-rule"/><span className="room-crumb">Meeting room</span></div>
-      <div className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i />{connection !== 'connected' ? connection : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</div>
+      <div className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i />{saveLabel}</div>
       <div className="tools">
         <button className="icon-only new-note-compact" onClick={createNewNote} title="New note" aria-label="Create a new note"><Plus /></button>
         <button className="presence" onClick={() => setPanelCollapsed(value => !value)} aria-label={`${people.length} ${people.length === 1 ? 'person' : 'people'} in this meeting`} aria-expanded={!panelCollapsed}>{people.slice(0, 3).map(person => <span key={person.id} style={{background: person.colour}} title={person.name}>{person.name?.[0]?.toUpperCase()}</span>)}{people.length > 3 && <small>+{people.length - 3}</small>}</button>
@@ -329,6 +332,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
           <div className="meta"><span><Clock3 />{new Intl.DateTimeFormat('en', {weekday:'long', month:'long', day:'numeric'}).format(new Date())}</span><span><Radio /> Live room</span></div>
           <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" placeholder="Untitled note" maxLength={100} />
           {connection !== 'connected' && <div className="connection-banner" role="status"><Radio /> Changes stay in this tab while Minute reconnects.</div>}
+          {writeError && <div className="locked-banner write-error-banner" role="alert"><Save /><span>{writeError === 'locked' ? 'This note was locked before your change reached the server.' : 'That change was not accepted because this link is view-only.'} Reload to return to the saved note.</span><button onClick={() => location.reload()}><RotateCcw /> Reload</button></div>}
           {role === 'viewer' && <div className="locked-banner viewer-banner"><BookOpen /> You have view-only access. Ask the room owner for an editable link to contribute.</div>}
           {locked && !isOwner && <div className="locked-banner"><Lock /> This room is locked. You can read, copy, and export, but only the owner can edit.</div>}
           {blockEditor}

@@ -28,6 +28,7 @@ export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ roo
   }), [editor])
 
   useEffect(() => {
+    if (!editable) return
     const timer = window.setTimeout(() => {
       if (room.meta.get('blocknoteSeeded')) return
       const legacyMarkdown = room.text.toString().trim()
@@ -38,7 +39,7 @@ export const CollaborativeEditor = forwardRef(function CollaborativeEditor({ roo
       room.meta.set('blocknoteSeeded', true)
     }, 700)
     return () => window.clearTimeout(timer)
-  }, [editor, room])
+  }, [editable, editor, room])
 
   const handleChange = () => {
     const markdown = editor.blocksToMarkdownLossy(editor.document)

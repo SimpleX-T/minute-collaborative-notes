@@ -142,7 +142,16 @@ wss.on('connection', (ws, room, clientId, ownerToken, editorToken) => {
   ws.on('message', (data, binary) => {
     if (binary) {
       try {
-        if (!isEditor || (room.access.locked && !isOwner)) return
+        if (!isEditor || (room.access.locked && !isOwner)) {
+          ws.send(JSON.stringify({
+            type: 'write-rejected',
+            reason: !isEditor ? 'view-only' : 'locked',
+            role,
+            locked: room.access.locked
+          }))
+          return
+        }
+        room.pendingSaveClients.add(ws)
         const stateVector = Y.encodeStateVector(room.doc)
         const update = new Uint8Array(data)
         Y.applyUpdate(room.doc, update, ws)
@@ -195,16 +204,20 @@ async function loadRoom(id) {
     access.public = meta.get('public') === true
   }
   meta.delete('ownerTokenHash')
-  const room = { id, doc, path, accessPath, versionsPath: join(DATA_DIR, `${id}.versions.json`), access, clients: new Map(), saveTimer: null, saveRevision: 0, persistChain: Promise.resolve(), accessTimer: null, publicTimer: null, cleanupTimer: null }
+  const room = { id, doc, path, accessPath, versionsPath: join(DATA_DIR, `${id}.versions.json`), access, clients: new Map(), pendingSaveClients: new Set(), saveTimer: null, saveRevision: 0, persistChain: Promise.resolve(), accessTimer: null, publicTimer: null, cleanupTimer: null }
   enforceAuthoritativeMeta(room)
   doc.on('update', (update, origin) => {
     clearTimeout(room.saveTimer)
     const revision = ++room.saveRevision
     room.saveTimer = setTimeout(() => persist(room).then(() => {
-      if (revision === room.saveRevision) broadcast(room, JSON.stringify({ type: 'saved', at: new Date().toISOString(), revision }))
+      if (revision !== room.saveRevision) return
+      const payload = JSON.stringify({ type: 'saved', at: new Date().toISOString(), revision })
+      for (const client of room.pendingSaveClients) if (client.readyState === WebSocket.OPEN) client.send(payload)
+      room.pendingSaveClients.clear()
     }).catch(error => {
       console.error('save failed', room.id, error)
-      broadcast(room, JSON.stringify({ type: 'save-error' }))
+      for (const client of room.pendingSaveClients) if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'save-error' }))
+      room.pendingSaveClients.clear()
     }), 750)
     clearTimeout(room.publicTimer)
     room.publicTimer = setTimeout(() => updatePublicIndex(room), 900)

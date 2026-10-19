@@ -16,7 +16,7 @@ export function createRoom(roomId, name, onState, { ownerToken = '', editorToken
 
   const emit = (state) => onState?.(state)
   const connect = () => {
-    emit({ connection: retry ? 'reconnecting' : 'connecting' })
+    emit({ connection: retry ? 'reconnecting' : 'connecting', role: 'checking' })
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const configuredApi = import.meta.env.VITE_API_URL?.replace(/^http/, 'ws').replace(/\/$/, '')
     const base = configuredApi || `${protocol}//${location.host}`
@@ -32,9 +32,10 @@ export function createRoom(roomId, name, onState, { ownerToken = '', editorToken
       if (typeof data === 'string') {
         const message = JSON.parse(data)
         if (message.type === 'presence') emit({ people: message.people })
-        if (message.type === 'access') emit({ role: message.role, locked: message.locked, public: message.public })
-        if (message.type === 'saved') emit({ saveState: 'saved', savedAt: message.at })
+        if (message.type === 'access') emit({ role: message.role, locked: message.locked, public: message.public, writeError: '' })
+        if (message.type === 'saved') emit({ saveState: 'saved', savedAt: message.at, writeError: '' })
         if (message.type === 'save-error') emit({ saveState: 'error' })
+        if (message.type === 'write-rejected') emit({ saveState: 'rejected', writeError: message.reason, role: message.role, locked: message.locked })
         if (message.type === 'awareness') applyAwarenessUpdate(awareness, new Uint8Array(message.update), 'remote')
       } else {
         Y.applyUpdate(doc, new Uint8Array(data), 'remote')
