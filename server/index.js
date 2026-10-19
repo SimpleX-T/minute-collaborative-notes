@@ -51,10 +51,12 @@ app.post('/api/rooms', async (request, response) => {
   }
   const id = randomBytes(10).toString('base64url')
   const ownerToken = randomBytes(24).toString('base64url')
+  const editorToken = randomBytes(24).toString('base64url')
   const room = await getRoom(id)
   room.access.ownerTokenHash = digest(ownerToken)
+  room.access.editorTokenHash = digest(editorToken)
   await Promise.all([persist(room), persistAccess(room)])
-  response.status(201).json({ id, ownerToken })
+  response.status(201).json({ id, ownerToken, editorToken })
 })
 app.get('/api/public', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30')
@@ -74,20 +76,22 @@ server.on('upgrade', async (request, socket, head) => {
   if (origin && allowedOrigins.size > 0 && !allowedOrigins.has(origin)) return socket.destroy()
   if (url.pathname !== '/ws' || !roomId || !/^[a-zA-Z0-9_-]{6,64}$/.test(roomId)) return socket.destroy()
   const room = await getRoom(roomId)
-  wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, room, url.searchParams.get('client'), url.searchParams.get('owner')))
+  wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, room, url.searchParams.get('client'), url.searchParams.get('owner'), url.searchParams.get('edit')))
 })
 
-wss.on('connection', (ws, room, clientId, ownerToken) => {
+wss.on('connection', (ws, room, clientId, ownerToken, editorToken) => {
   const id = clientId?.slice(0, 80) || crypto.randomUUID()
   const isOwner = Boolean(ownerToken && digest(ownerToken) === room.access.ownerTokenHash)
-  room.clients.set(id, { ws, id, name: 'Guest', colour: '#555', isOwner })
+  const isEditor = isOwner || !room.access.editorTokenHash || Boolean(editorToken && digest(editorToken) === room.access.editorTokenHash)
+  const role = isOwner ? 'owner' : isEditor ? 'editor' : 'viewer'
+  room.clients.set(id, { ws, id, name: 'Guest', colour: '#555', isOwner, role })
   ws.send(Y.encodeStateAsUpdate(room.doc))
-  ws.send(JSON.stringify({ type: 'access', role: isOwner ? 'owner' : 'editor', locked: room.access.locked, public: room.access.public }))
+  ws.send(JSON.stringify({ type: 'access', role, locked: room.access.locked, public: room.access.public }))
   broadcastPresence(room)
   ws.on('message', (data, binary) => {
     if (binary) {
       try {
-        if (room.access.locked && !isOwner) return
+        if (!isEditor || (room.access.locked && !isOwner)) return
         const stateVector = Y.encodeStateVector(room.doc)
         const update = new Uint8Array(data)
         Y.applyUpdate(room.doc, update, ws)
@@ -130,7 +134,7 @@ async function loadRoom(id) {
   const path = join(DATA_DIR, `${id}.bin`)
   const accessPath = join(DATA_DIR, `${id}.access.json`)
   try { Y.applyUpdate(doc, new Uint8Array(await readFile(path)), 'disk') } catch (error) { if (error.code !== 'ENOENT') console.error('load failed', id, error) }
-  let access = { ownerTokenHash: '', locked: false, public: false }
+  let access = { ownerTokenHash: '', editorTokenHash: '', locked: false, public: false }
   let accessLoaded = false
   try { access = { ...access, ...JSON.parse(await readFile(accessPath, 'utf8')) }; accessLoaded = true } catch (error) { if (error.code !== 'ENOENT') console.error('access load failed', id, error) }
   const meta = doc.getMap('meta')

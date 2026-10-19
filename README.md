@@ -10,7 +10,7 @@ The canonical document is a BlockNote/Yjs block tree. It supports slash commands
 
 ## Access model
 
-Room creation returns a bearer owner capability in the URL fragment. The fragment is never included in normal share links or HTTP requests. Owners can lock and unlock editing; the WebSocket server rejects non-owner document updates while locked. This is a capability-link beta model, not a substitute for authenticated enterprise access control.
+Room creation returns separate bearer owner and editor capabilities in the URL fragment. The Share dialog can copy an editor link or a token-free view-only link; public-pad and reading-view links are view-only. Owners can lock and unlock editing, while the WebSocket server rejects viewer writes and non-owner writes while locked. Capability hashes live in a server-only access sidecar rather than the collaborative document. This is a capability-link beta model, not a substitute for authenticated enterprise access control.
 
 ## Run locally
 
@@ -32,7 +32,7 @@ Put the process behind a TLS reverse proxy that supports WebSocket upgrades. Mou
 
 ## Privacy model
 
-Rooms are bearer-capability links. Shared links edit unlocked rooms; the owner fragment controls locking and is hashed before server storage. Notes persist on the server unencrypted, so the current version is appropriate for ordinary internal meetings—not secrets or regulated data. Add expiry, separate viewer links, rate limits, audit logs, and end-to-end encryption before handling sensitive material.
+Rooms use bearer-capability links with separate owner, editor, and viewer roles. Owner and editor fragments are hashed before server storage; token-free links are read-only. Notes persist on the server unencrypted, so the current version is appropriate for ordinary internal meetings—not secrets or regulated data. Add expiry, link rotation, audit logs, and end-to-end encryption before handling sensitive material.
 
 ## Embed contract
 

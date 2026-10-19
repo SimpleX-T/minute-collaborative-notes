@@ -14,7 +14,7 @@
 ## Public beta gate
 
 - BlockNote-native collaborative blocks and cursors.
-- Owner, editor, and viewer capabilities; room locking and link rotation.
+- Owner, editor, and viewer capabilities; server-enforced room locking. Link rotation remains a beta milestone.
 - Durable database/object persistence with revision snapshots and restore.
 - Slash menu, code blocks, task lists, tables, callouts, diagrams, and Markdown/HTML export.
 - Presence, reconnect/offline states, abuse limits, CSP, observability, and error reporting.

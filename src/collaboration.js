@@ -3,7 +3,7 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwareness
 
 const colours = ['#C34A36', '#2F6B52', '#355C9A', '#8B5E34', '#6C4E8A']
 
-export function createRoom(roomId, name, onState, { ownerToken = '' } = {}) {
+export function createRoom(roomId, name, onState, { ownerToken = '', editorToken = '' } = {}) {
   const doc = new Y.Doc()
   const text = doc.getText('body')
   const meta = doc.getMap('meta')
@@ -20,7 +20,7 @@ export function createRoom(roomId, name, onState, { ownerToken = '' } = {}) {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const configuredApi = import.meta.env.VITE_API_URL?.replace(/^http/, 'ws').replace(/\/$/, '')
     const base = configuredApi || `${protocol}//${location.host}`
-    socket = new WebSocket(`${base}/ws?room=${encodeURIComponent(roomId)}&client=${clientId}&owner=${encodeURIComponent(ownerToken)}`)
+    socket = new WebSocket(`${base}/ws?room=${encodeURIComponent(roomId)}&client=${clientId}&owner=${encodeURIComponent(ownerToken)}&edit=${encodeURIComponent(editorToken)}`)
     socket.binaryType = 'arraybuffer'
     socket.onopen = () => {
       retry = 0

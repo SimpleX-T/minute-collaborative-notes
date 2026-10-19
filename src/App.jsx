@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoom } from './collaboration'
 import { createEmbedBridge } from './embedBridge'
-import { CheckSquare2, ChevronRight, Clock3, Download, Eye, FileText, Globe2, Lock, MessageSquareText, MonitorUp, MoreHorizontal, PanelLeft, Plus, Radio, Share2, Sparkles, Unlock } from 'lucide-react'
+import { BookOpen, CheckSquare2, ChevronRight, Clock3, Download, Eye, FileText, Globe2, Link2, Lock, MessageSquareText, MonitorUp, MoreHorizontal, PanelLeft, Plus, Radio, Share2, Sparkles, Unlock, X } from 'lucide-react'
 
 const CollaborativeEditor = lazy(() => import('./CollaborativeEditor').then(module => ({ default: module.CollaborativeEditor })))
 const API_URL = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || ''
@@ -21,8 +21,8 @@ function Home() {
     try {
       const response = await fetch(`${API_URL}/api/rooms`, { method: 'POST' })
       if (!response.ok) throw new Error('Room creation failed')
-      const { id, ownerToken } = await response.json()
-      location.assign(`/n/${id}#owner=${ownerToken}`)
+      const { id, ownerToken, editorToken } = await response.json()
+      location.assign(`/n/${id}#owner=${ownerToken}&edit=${editorToken}`)
     } catch {
       setCreating(false)
       window.alert('Minute could not create the room. Check the connection and try again.')
@@ -67,6 +67,7 @@ function Note({ roomId, compact = false }) {
   const [connection, setConnection] = useState('connecting')
   const [people, setPeople] = useState([])
   const [copied, setCopied] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const [isPublic, setIsPublic] = useState(false)
   const [locked, setLocked] = useState(false)
   const [collaboration, setCollaboration] = useState(null)
@@ -76,6 +77,7 @@ function Note({ roomId, compact = false }) {
   const editorRef = useRef(null)
   const embedBridge = useRef(null)
   const ownerToken = useMemo(() => new URLSearchParams(location.hash.slice(1)).get('owner'), [])
+  const editorToken = useMemo(() => new URLSearchParams(location.hash.slice(1)).get('edit'), [])
   const isOwner = role === 'owner'
   const embedState = useRef({ title, locked, role })
   embedState.current = { title, locked, role }
@@ -88,7 +90,7 @@ function Note({ roomId, compact = false }) {
       if (state.role) setRole(state.role)
       if (typeof state.locked === 'boolean') setLocked(state.locked)
       if (typeof state.public === 'boolean') setIsPublic(state.public)
-    }, { ownerToken })
+    }, { ownerToken, editorToken })
     room.current = collaboration
     setCollaboration(collaboration)
     const update = () => {
@@ -133,9 +135,10 @@ function Note({ roomId, compact = false }) {
     const next = event.target.value.slice(0, 30)
     setName(next); localStorage.setItem('minute:name', next); room.current?.updateName(next)
   }
-  const share = async () => {
-    await navigator.clipboard.writeText(`${location.origin}/n/${roomId}`)
-    setCopied(true); window.setTimeout(() => setCopied(false), 1800)
+  const copyLink = async mode => {
+    const token = mode === 'editor' ? editorToken : ''
+    await navigator.clipboard.writeText(`${location.origin}/n/${roomId}${token ? `#edit=${token}` : ''}`)
+    setCopied(mode); window.setTimeout(() => setCopied(false), 1800)
   }
   const download = () => {
     const markdown = editorRef.current?.toMarkdown() || ''
@@ -151,7 +154,8 @@ function Note({ roomId, compact = false }) {
         : window.open('', `minute-${roomId}`, 'popup,width=430,height=620')
       if (!target) return
       floatingWindow.current = target
-      target.location.href = `${location.origin}/embed/${roomId}${ownerToken ? `#owner=${ownerToken}` : ''}`
+      const capability = ownerToken ? `owner=${ownerToken}${editorToken ? `&edit=${editorToken}` : ''}` : editorToken ? `edit=${editorToken}` : ''
+      target.location.href = `${location.origin}/embed/${roomId}${capability ? `#${capability}` : ''}`
       target.addEventListener('pagehide', () => { if (floatingWindow.current === target) floatingWindow.current = null }, { once: true })
     } catch (error) { console.warn('Floating notes unavailable', error) }
   }
@@ -167,9 +171,10 @@ function Note({ roomId, compact = false }) {
 
   if (!collaboration) return <main className="room-loading"><Brand /><span>Opening the room…</span></main>
 
-  const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={!locked || isOwner} compact={compact} /></Suspense>
+  const canEdit = role !== 'viewer' && (!locked || isOwner)
+  const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><span className={`status ${connection}`}><i/>{locked ? 'Locked' : 'Live'}</span></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={locked && !isOwner}/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><span className={`status ${connection}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : 'Live'}</span></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit}/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
@@ -181,7 +186,7 @@ function Note({ roomId, compact = false }) {
         <button className={`icon-action publish ${isPublic ? 'is-public' : ''}`} onClick={togglePublic} disabled={!isOwner} title={isOwner ? (isPublic ? 'Remove from Public Pads' : 'Publish to Public Pads') : 'Only the room owner can publish'}><Globe2 /> <span>{isPublic ? 'Public' : 'Publish'}</span></button>
         <button className="icon-action float" onClick={floatNote} title="Keep notes above your other windows"><MonitorUp /> <span>Float</span></button>
         <button className="icon-only" onClick={download} title="Export Markdown" aria-label="Export Markdown"><Download /></button>
-        <button className="share" onClick={share}><Share2 />{copied ? 'Copied' : 'Share'}</button>
+        <button className="share" onClick={() => setShareOpen(true)}><Share2 />Share</button>
       </div>
     </header>
     <div className="workspace-shell">
@@ -198,7 +203,8 @@ function Note({ roomId, compact = false }) {
       <section className="paper-wrap">
         <div className="paper">
           <div className="meta"><span><Clock3 />{new Intl.DateTimeFormat('en', {weekday:'long', month:'long', day:'numeric'}).format(new Date())}</span><span><Radio /> Live room</span></div>
-          <input className="title" value={title} onChange={changeTitle} readOnly={locked && !isOwner} aria-label="Meeting title" />
+          <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" />
+          {role === 'viewer' && <div className="locked-banner viewer-banner"><BookOpen /> You have view-only access. Ask the room owner for an editable link to contribute.</div>}
           {locked && !isOwner && <div className="locked-banner"><Lock /> This room is locked. You can read, copy, and export, but only the owner can edit.</div>}
           {blockEditor}
         </div>
@@ -207,12 +213,21 @@ function Note({ roomId, compact = false }) {
         <div className="panel-heading"><div><span>Room</span><h2>In this meeting</h2></div><button aria-label="Collapse panel"><PanelLeft /></button></div>
         <div className="people-card">
           {people.map(person => <div className="person" key={person.id}><span style={{background:person.colour}}>{person.name?.[0]?.toUpperCase()}</span><div><strong>{person.name}</strong><small>{person.id === room.current?.clientId ? 'You · editing' : 'In the note'}</small></div><i /></div>)}
-          <button onClick={share}><Plus /> Invite someone</button>
+          <button onClick={() => setShareOpen(true)}><Plus /> Invite someone</button>
         </div>
         <div className="panel-section"><span className="panel-label">Meeting pulse</span><div className="pulse-row"><span className="pulse-icon coral"><MessageSquareText /></span><div><strong>Capture decisions</strong><small>Turn discussion into clarity.</small></div></div><div className="pulse-row"><span className="pulse-icon blue"><CheckSquare2 /></span><div><strong>Assign next steps</strong><small>Add an owner before leaving.</small></div></div></div>
         <div className="meeting-tip"><Sparkles/><p><strong>Small ritual, big payoff.</strong><br/>End with two minutes of silent review so everyone leaves aligned.</p></div>
       </aside>
     </div>
+    {shareOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShareOpen(false) }}>
+      <section className="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title">
+        <header><div><span>Access</span><h2 id="share-title">Share this note</h2></div><button onClick={() => setShareOpen(false)} aria-label="Close share dialog"><X /></button></header>
+        <p>Choose whether collaborators can write with you or simply follow along.</p>
+        <button className="share-option" onClick={() => copyLink('editor')} disabled={!editorToken}><span><Link2 /></span><div><strong>Editable link</strong><small>Anyone with this private link can contribute.</small></div><b>{copied === 'editor' ? 'Copied' : 'Copy'}</b></button>
+        <button className="share-option" onClick={() => copyLink('viewer')}><span><BookOpen /></span><div><strong>View-only link</strong><small>People can read and export, but cannot edit.</small></div><b>{copied === 'viewer' ? 'Copied' : 'Copy'}</b></button>
+        {!editorToken && <small className="legacy-note">This legacy room has no separate editor capability. Create a new room for editable links.</small>}
+      </section>
+    </div>}
   </main>
 }
 
