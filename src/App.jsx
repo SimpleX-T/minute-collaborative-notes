@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoom } from './collaboration'
 import { createEmbedBridge } from './embedBridge'
 import { exportDocument } from './exportDocument'
-import { BookOpen, CheckSquare2, ChevronRight, Clock3, Code2, Download, Eye, FileText, Globe2, History, Link2, Lock, MessageSquareText, MonitorUp, Moon, MoreHorizontal, PanelLeft, Plus, Radio, RotateCcw, Save, Share2, Sparkles, Sun, Unlock, X } from 'lucide-react'
+import { BookOpen, ChevronRight, Clock3, Code2, Download, Eye, Globe2, History, Link2, Lock, MonitorUp, Moon, MoreHorizontal, Plus, Radio, RotateCcw, Save, Share2, Sun, Unlock, X } from 'lucide-react'
 
 const CollaborativeEditor = lazy(() => import('./CollaborativeEditor').then(module => ({ default: module.CollaborativeEditor })))
 const PastePage = lazy(() => import('./PastePage').then(module => ({ default: module.PastePage })))
@@ -21,15 +21,27 @@ export function App() {
 
 function Home({ theme, onThemeToggle }) {
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
   const [publicPads, setPublicPads] = useState([])
-  useEffect(() => { fetch(`${API_URL}/api/public`).then(response => response.ok ? response.json() : []).then(setPublicPads).catch(() => {}) }, [])
+  const [publicState, setPublicState] = useState('loading')
+  const loadPublicPads = async () => {
+    setPublicState('loading')
+    try {
+      const response = await fetch(`${API_URL}/api/public`)
+      if (!response.ok) throw new Error('Public pads unavailable')
+      setPublicPads(await response.json())
+      setPublicState('ready')
+    } catch { setPublicState('error') }
+  }
+  useEffect(() => { loadPublicPads() }, [])
   const create = async () => {
     setCreating(true)
+    setCreateError('')
     try {
       location.assign(await createRoomUrl())
     } catch {
       setCreating(false)
-      window.alert('Minute could not create the room. Check the connection and try again.')
+      setCreateError('The room could not be created. Check your connection and try again.')
     }
   }
   useEffect(() => {
@@ -46,6 +58,7 @@ function Home({ theme, onThemeToggle }) {
       <h1>Write once.<br/><em>Leave aligned.</em></h1>
       <p>One quiet page for notes, decisions, and next steps. Share the link and everyone is there—instantly.</p>
       <button className="primary" onClick={create} disabled={creating}>{creating ? 'Opening room…' : 'Start a shared note'} <Arrow /></button>
+      {createError && <div className="hero-error" role="alert">{createError} <button onClick={create}>Retry</button></div>}
       <a className="paste-link" href="/paste"><Code2 /> Share a code paste</a>
       <span className="subnote">Private link · Live collaboration · Export anytime</span>
     </section>
@@ -61,7 +74,7 @@ function Home({ theme, onThemeToggle }) {
     <section className="public-pads" aria-labelledby="public-pads-title">
       <div className="public-heading"><div><span className="section-index">01</span><h2 id="public-pads-title">Public pads</h2></div><p>Open rooms shared by their authors.<br/>Join the thought in progress.</p></div>
       <div className="pad-list">
-        {publicPads.length ? publicPads.map((pad, index) => <a href={`/n/${pad.id}`} className="pad-row" key={pad.id}>
+        {publicState === 'error' ? <div className="empty-pads public-error"><span>Public pads could not load.</span><p>Your private notes still work. <button onClick={loadPublicPads}>Try again</button></p></div> : publicState === 'loading' ? <div className="public-loading" aria-label="Loading public pads"><i/><i/><i/></div> : publicPads.length ? publicPads.map((pad, index) => <a href={`/n/${pad.id}`} className="pad-row" key={pad.id}>
           <span className="pad-number">{String(index + 1).padStart(2, '0')}</span>
           <span className="pad-copy"><strong>{pad.title}</strong><small>{pad.excerpt || 'A new conversation is starting.'}</small></span>
           <time>{relativeTime(pad.updatedAt)}</time><Arrow />
@@ -84,9 +97,10 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const [exportOpen, setExportOpen] = useState(false)
   const [exporting, setExporting] = useState('')
   const [versionsOpen, setVersionsOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [versions, setVersions] = useState([])
   const [versionBusy, setVersionBusy] = useState('')
-  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [panelCollapsed, setPanelCollapsed] = useState(true)
   const [toast, setToast] = useState('')
   const [isPublic, setIsPublic] = useState(false)
   const [locked, setLocked] = useState(false)
@@ -102,6 +116,18 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const embedState = useRef({ title, locked, role })
   embedState.current = { title, locked, role }
   const colour = useMemo(() => ['#315ee7', '#e45c3f', '#24866f', '#8a55d6'][Math.abs(name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % 4], [name])
+
+  useEffect(() => {
+    const closeTransientUi = event => {
+      if (event.key !== 'Escape') return
+      setExportOpen(false)
+      setMobileMenuOpen(false)
+      setShareOpen(false)
+      setVersionsOpen(false)
+    }
+    window.addEventListener('keydown', closeTransientUi)
+    return () => window.removeEventListener('keydown', closeTransientUi)
+  }, [])
 
   useEffect(() => {
     const collaboration = createRoom(roomId, name, state => {
@@ -145,7 +171,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   }, [people])
 
   const changeTitle = event => {
-    const next = event.target.value
+    const next = event.target.value.slice(0, 100)
     setTitle(next)
     room.current.meta.set('title', next)
   }
@@ -249,7 +275,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   }
   const togglePublic = () => {
     if (!isOwner) return
-    if (!isPublic && !window.confirm('Publish this note? Anyone visiting Minute can discover and edit it.')) return
+    if (!isPublic && !window.confirm('Publish this note? Anyone visiting Minute can discover and read it. Only people with the editable link can contribute.')) return
     room.current.updateAccess('public', !isPublic)
   }
   const toggleLock = () => {
@@ -262,64 +288,62 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
   const canEdit = role !== 'viewer' && (!locked || isOwner)
   const blockEditor = <Suspense fallback={<div className="editor-skeleton"><span/><span/><span/></div>}><CollaborativeEditor ref={editorRef} room={collaboration} user={{ name, color: colour }} editable={canEdit} compact={compact} theme={theme} /></Suspense>
 
-  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`}><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit} placeholder="Untitled note"/>{blockEditor}</main>
+  if (compact) return <main className="embed-room"><header><Brand/><div className="embed-actions"><span className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i/>{role === 'viewer' ? 'View only' : locked ? 'Locked' : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</span><ThemeToggle theme={theme} onToggle={onThemeToggle} /></div></header><input className="embed-title" value={title} onChange={changeTitle} readOnly={!canEdit} placeholder="Untitled note" maxLength={100}/>{blockEditor}</main>
 
   return <main className="workspace">
     <header className="toolbar">
       <div className="toolbar-start"><Brand /><span className="crumb-rule"/><span className="room-crumb">Meeting room</span></div>
-      <div className={`status ${connection} ${saveState}`}><i />{connection !== 'connected' ? connection : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</div>
+      <div className={`status ${connection} ${saveState}`} role="status" aria-live="polite"><i />{connection !== 'connected' ? connection : saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'Saved'}</div>
       <div className="tools">
-        <div className="presence">{people.slice(0, 3).map(person => <span key={person.id} style={{background: person.colour}} title={person.name}>{person.name?.[0]?.toUpperCase()}</span>)}{people.length > 3 && <small>+{people.length - 3}</small>}</div>
-        <button className={`icon-action lock-action ${locked ? 'is-locked' : ''}`} onClick={toggleLock} disabled={!isOwner} title={isOwner ? (locked ? 'Unlock editing' : 'Lock editing') : 'Only the room owner can change the lock'}>{locked ? <Lock /> : <Unlock />} <span>{locked ? 'Locked' : 'Unlocked'}</span></button>
-        <button className={`icon-action publish ${isPublic ? 'is-public' : ''}`} onClick={togglePublic} disabled={!isOwner} title={isOwner ? (isPublic ? 'Remove from Public Pads' : 'Publish to Public Pads') : 'Only the room owner can publish'}><Globe2 /> <span>{isPublic ? 'Public' : 'Publish'}</span></button>
-        <button className="icon-action float" onClick={floatNote} title="Keep notes above your other windows"><MonitorUp /> <span>Float</span></button>
-        <div className="export-control">
-          <button className="icon-only" onClick={() => setExportOpen(value => !value)} title="Download note" aria-label="Download note" aria-expanded={exportOpen}><Download /></button>
-          {exportOpen && <div className="export-menu" role="menu">
+        <button className="icon-only new-note-compact" onClick={createNewNote} title="New note" aria-label="Create a new note"><Plus /></button>
+        <button className="presence" onClick={() => setPanelCollapsed(value => !value)} aria-label={`${people.length} ${people.length === 1 ? 'person' : 'people'} in this meeting`} aria-expanded={!panelCollapsed}>{people.slice(0, 3).map(person => <span key={person.id} style={{background: person.colour}} title={person.name}>{person.name?.[0]?.toUpperCase()}</span>)}{people.length > 3 && <small>+{people.length - 3}</small>}</button>
+        <button className={`icon-action lock-action ${locked ? 'is-locked' : ''}`} onClick={toggleLock} disabled={!isOwner} aria-pressed={locked} title={isOwner ? (locked ? 'Unlock editing' : 'Lock editing') : 'Only the room owner can change the lock'}>{locked ? <Lock /> : <Unlock />} <span>{locked ? 'Locked' : 'Unlocked'}</span></button>
+        <div className="mobile-actions">
+          <button className="icon-only mobile-actions-trigger" onClick={() => { setMobileMenuOpen(value => !value); setExportOpen(false) }} aria-label="More room actions" aria-expanded={mobileMenuOpen || exportOpen}><MoreHorizontal /></button>
+          {mobileMenuOpen && <div className="export-menu mobile-actions-menu" role="menu">
+            <span>Room actions</span>
+            <button role="menuitem" onClick={() => { setMobileMenuOpen(false); createNewNote() }}><Plus/><strong>New note</strong></button>
+            <button role="menuitem" onClick={() => { toggleLock(); setMobileMenuOpen(false) }} disabled={!isOwner}>{locked ? <Unlock/> : <Lock/>}<strong>{locked ? 'Unlock editing' : 'Lock editing'}</strong></button>
+            <button role="menuitem" onClick={() => window.open(`/embed/${roomId}`, '_blank', 'noopener')}><Eye/><strong>Reading view</strong></button>
+            <button role="menuitem" onClick={() => { togglePublic(); setMobileMenuOpen(false) }} disabled={!isOwner}><Globe2/><strong>{isPublic ? 'Unpublish note' : 'Publish note'}</strong></button>
+            <button role="menuitem" onClick={() => { floatNote(); setMobileMenuOpen(false) }}><MonitorUp/><strong>Float note</strong></button>
+            <button role="menuitem" onClick={() => { setMobileMenuOpen(false); loadVersions() }}><History/><strong>Version history</strong></button>
+            <button role="menuitem" onClick={() => { setMobileMenuOpen(false); setExportOpen(true) }}><Download/><strong>Download as…</strong></button>
+            <button role="menuitem" onClick={() => { onThemeToggle(); setMobileMenuOpen(false) }}>{theme === 'dark' ? <Sun/> : <Moon/>}<strong>{theme === 'dark' ? 'Use light mode' : 'Use dark mode'}</strong></button>
+            <a role="menuitem" href="/paste"><Code2/><strong>New code paste</strong></a>
+          </div>}
+          {exportOpen && <div className="export-menu mobile-actions-menu" role="menu">
+            <button className="menu-back" role="menuitem" onClick={() => { setExportOpen(false); setMobileMenuOpen(true) }}><ChevronRight/><strong>Room actions</strong></button>
             <span>Download as</span>
             {[['markdown', 'Markdown', '.md'], ['pdf', 'PDF document', '.pdf'], ['docx', 'Word document', '.docx'], ['html', 'Web page', '.html'], ['text', 'Plain text', '.txt'], ['json', 'Block data', '.json']].map(([format, label, extension]) =>
               <button key={format} role="menuitem" onClick={() => download(format)} disabled={Boolean(exporting)}><strong>{exporting === format ? 'Preparing…' : label}</strong><small>{extension}</small></button>
             )}
           </div>}
         </div>
-        <button className="icon-only" onClick={loadVersions} title="Version history" aria-label="Version history"><History /></button>
-        <ThemeToggle theme={theme} onToggle={onThemeToggle} />
         <button className="share" onClick={() => setShareOpen(true)}><Share2 />Share</button>
       </div>
     </header>
     <div className={`workspace-shell ${panelCollapsed ? 'panel-is-collapsed' : ''}`}>
-      <aside className="note-rail">
-        <button className="new-note" onClick={createNewNote}><Plus /> New note</button>
-        <nav className="room-nav" aria-label="Room navigation">
-          <button className="active"><FileText /><span>Meeting note</span><ChevronRight /></button>
-          <button onClick={() => window.open(`/embed/${roomId}`, '_blank', 'noopener')}><Eye /><span>Reading view</span></button>
-          <button onClick={togglePublic}><Globe2 /><span>{isPublic ? 'Unpublish note' : 'Publish note'}</span></button>
-          <a href="/paste"><Code2 /><span>New code paste</span></a>
-        </nav>
-        <div className="rail-art"><img src="/assets/collaboration-still-life.png" alt="Abstract paper, pencil and glass composition"/><div><Sparkles/><span>Good meetings leave<br/>clear next steps.</span></div></div>
-        <div className="identity"><span className="identity-avatar">{name[0]?.toUpperCase()}</span><div><label>You are</label><input value={name} onChange={changeName} aria-label="Your display name" /></div><MoreHorizontal /></div>
-      </aside>
       <section className="paper-wrap">
         <div className="paper">
           <div className="meta"><span><Clock3 />{new Intl.DateTimeFormat('en', {weekday:'long', month:'long', day:'numeric'}).format(new Date())}</span><span><Radio /> Live room</span></div>
-          <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" placeholder="Untitled note" />
+          <input className="title" value={title} onChange={changeTitle} readOnly={!canEdit} aria-label="Meeting title" placeholder="Untitled note" maxLength={100} />
+          {connection !== 'connected' && <div className="connection-banner" role="status"><Radio /> Changes stay in this tab while Minute reconnects.</div>}
           {role === 'viewer' && <div className="locked-banner viewer-banner"><BookOpen /> You have view-only access. Ask the room owner for an editable link to contribute.</div>}
           {locked && !isOwner && <div className="locked-banner"><Lock /> This room is locked. You can read, copy, and export, but only the owner can edit.</div>}
           {blockEditor}
         </div>
       </section>
-      <aside className="meeting-panel">
-        <div className="panel-heading"><div><span>Room</span><h2>In this meeting</h2></div><button onClick={() => setPanelCollapsed(true)} aria-label="Collapse panel"><PanelLeft /></button></div>
+      <aside className={`meeting-panel ${panelCollapsed ? 'is-collapsed' : ''}`} aria-hidden={panelCollapsed}>
+        <div className="panel-heading"><div><span>Room</span><h2>In this meeting</h2></div><button onClick={() => setPanelCollapsed(true)} aria-label="Close participants"><X /></button></div>
+        <label className="display-name"><span>Your display name</span><input value={name} onChange={changeName} maxLength={30}/></label>
         <div className="people-card">
           {people.map(person => <div className="person" key={person.id}><span style={{background:person.colour}}>{person.name?.[0]?.toUpperCase()}</span><div><strong>{person.name}</strong><small>{person.id === room.current?.clientId ? 'You · editing' : 'In the note'}</small></div><i /></div>)}
           <button onClick={() => setShareOpen(true)}><Plus /> Invite someone</button>
         </div>
-        <div className="panel-section"><span className="panel-label">Meeting pulse</span><div className="pulse-row"><span className="pulse-icon coral"><MessageSquareText /></span><div><strong>Capture decisions</strong><small>Turn discussion into clarity.</small></div></div><div className="pulse-row"><span className="pulse-icon blue"><CheckSquare2 /></span><div><strong>Assign next steps</strong><small>Add an owner before leaving.</small></div></div></div>
-        <div className="meeting-tip"><Sparkles/><p><strong>Small ritual, big payoff.</strong><br/>End with two minutes of silent review so everyone leaves aligned.</p></div>
       </aside>
-      {panelCollapsed && <button className="panel-reopen" onClick={() => setPanelCollapsed(false)} aria-label="Open meeting panel"><PanelLeft /></button>}
     </div>
-    {shareOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShareOpen(false) }}>
+    {shareOpen && <Modal onClose={() => setShareOpen(false)}>
       <section className="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title">
         <header><div><span>Access</span><h2 id="share-title">Share this note</h2></div><button onClick={() => setShareOpen(false)} aria-label="Close share dialog"><X /></button></header>
         <p>Choose whether collaborators can write with you or simply follow along.</p>
@@ -327,8 +351,8 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
         <button className="share-option" onClick={() => copyLink('viewer')}><span><BookOpen /></span><div><strong>View-only link</strong><small>People can read and export, but cannot edit.</small></div><b>{copied === 'viewer' ? 'Copied' : 'Copy'}</b></button>
         {!editorToken && <small className="legacy-note">This legacy room has no separate editor capability. Create a new room for editable links.</small>}
       </section>
-    </div>}
-    {versionsOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setVersionsOpen(false) }}>
+    </Modal>}
+    {versionsOpen && <Modal onClose={() => setVersionsOpen(false)}>
       <section className="share-dialog versions-dialog" role="dialog" aria-modal="true" aria-labelledby="versions-title">
         <header><div><span>Document history</span><h2 id="versions-title">Versions</h2></div><button onClick={() => setVersionsOpen(false)} aria-label="Close version history"><X /></button></header>
         <p>Checkpoints preserve the full block structure. Restoring creates a new collaborative change, so nobody loses the current state.</p>
@@ -337,7 +361,7 @@ function Note({ roomId, compact = false, theme, onThemeToggle }) {
           {versions.length ? versions.map(version => <div className="version-row" key={version.id}><div><strong>{version.label}</strong><small>{new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(version.createdAt))}</small></div>{isOwner && <button onClick={() => restoreVersion(version.id)} disabled={Boolean(versionBusy)}><RotateCcw /> Restore</button>}</div>) : <div className="version-empty">No checkpoints yet. Save the first one above.</div>}
         </div>
       </section>
-    </div>}
+    </Modal>}
     {toast && <div className="toast" role="status">{toast}</div>}
   </main>
 }
@@ -349,6 +373,31 @@ function ThemeToggle({ theme, onToggle }) {
   return <button className="theme-toggle" onClick={onToggle} aria-label={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Use ${theme === 'dark' ? 'light' : 'dark'} mode`}>
     <span>{theme === 'dark' ? <Sun /> : <Moon />}</span>
   </button>
+}
+
+function Modal({ children, onClose }) {
+  const backdropRef = useRef(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const previousFocus = document.activeElement
+    const container = backdropRef.current
+    const focusable = () => [...container.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])')]
+    focusable()[0]?.focus()
+    const keepFocusInside = event => {
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    container.addEventListener('keydown', keepFocusInside)
+    return () => { container.removeEventListener('keydown', keepFocusInside); previousFocus?.focus?.() }
+  }, [])
+  return <div ref={backdropRef} className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>{children}</div>
 }
 
 function useTheme() {
